@@ -44,7 +44,7 @@ func ParseMessage(msg *imap.Response) Message {
 
 	flags := imap.AsFlagSet(attrs["FLAGS"])
 
-	log.Println(from, flags)
+	//log.Println(from, flags)
 
 	return Message{recvTime, sentTime, from, subject, flags}
 }
@@ -138,9 +138,9 @@ func MailClient(msgChan chan<- []Message) error {
 		return fmt.Errorf("Failed to switch to [Gmail]/All Mail:", err)
 	}
 
-	rsp, err := imap.Wait(client.Capability())
+	//rsp, err := imap.Wait(client.Capability())
 
-	ReportOK(rsp, err)
+	//ReportOK(rsp, err)
 	//log.Println("Caps =", rsp, err)
 
 	//return nil
