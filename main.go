@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	//"code.google.com/p/rsc/imap"
 	"code.google.com/p/go-imap/go1/imap"
 	"github.com/kr/pretty"
 )
@@ -23,38 +22,31 @@ var password = flag.String("password", "", "Mail to check")
 type Message struct {
 	recvd, date   time.Time
 	from, subject string
+	flags         imap.FlagSet
 }
 
-func ParseMessage(msg *imap.Response) (time.Time, time.Time, string, string) {
-	t := func(s string) string {
-		s, ok := imap.Unquote(s)
-		if !ok {
-			panic("arg")
-		}
-		return s
-	}
+func ParseMessage(msg *imap.Response) Message {
+	attrs := msg.MessageInfo().Attrs
 
-	as := msg.MessageInfo().Attrs
-	recvd := t(as["INTERNALDATE"].(string))
+	recvTime := imap.AsDateTime(attrs["INTERNALDATE"])
 
-	r, err := time.Parse("02-Jan-2006 15:04:05 -0700", recvd)
+	envl := imap.AsList(attrs["ENVELOPE"])
+	sentTimeStr := imap.AsString(envl[0])
+
+	sentTime, err := time.Parse("Mon, 2 Jan 2006 15:04:05 -0700", sentTimeStr)
 	if err != nil {
 		log.Panic(err)
 	}
 
-	fs := as["ENVELOPE"].([]imap.Field)
-	date := t(fs[0].(string))
-	subject := t(fs[1].(string))
-	// WTH, go-imap?
-	recvFrom := fs[2].([]imap.Field)[0].([]imap.Field)
-	from := t(recvFrom[2].(string)) + "@" + t(recvFrom[3].(string))
+	subject := imap.AsString(envl[1])
+	recvFrom := imap.AsList(imap.AsList(envl[2])[0])
+	from := imap.AsString(recvFrom[2]) + "@" + imap.AsString(recvFrom[3])
 
-	d, err := time.Parse("Mon, 2 Jan 2006 15:04:05 -0700", date)
-	if err != nil {
-		log.Panic(err)
-	}
+	flags := imap.AsFlagSet(attrs["FLAGS"])
 
-	return r, d, from, subject
+	log.Println(from, flags)
+
+	return Message{recvTime, sentTime, from, subject, flags}
 }
 
 func FetchMessages(client *imap.Client, ids []uint32) []Message {
@@ -62,15 +54,14 @@ func FetchMessages(client *imap.Client, ids []uint32) []Message {
 	set, _ := imap.NewSeqSet("")
 	set.AddNum(ids...)
 
-	cmd, err := imap.Wait(client.Fetch(set, "ENVELOPE", "INTERNALDATE", "BODY[]"))
+	cmd, err := imap.Wait(client.Fetch(set, "ENVELOPE", "INTERNALDATE", "FLAGS"))
 	if err != nil {
 		log.Fatal("Failed to fetch e-mails since yesterday:", err)
 	}
 
 	messages := []Message{}
 	for _, msg := range cmd.Data {
-		recvd, date, from, subject := ParseMessage(msg)
-		messages = append(messages, Message{recvd, date, from, subject})
+		messages = append(messages, ParseMessage(msg))
 	}
 	return messages
 }
@@ -119,9 +110,103 @@ func (m *MailHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 			_, hostTime := x[0], x[1]
 
-			w.Write([]byte(fmt.Sprintf("%16s | %v | %v | %8s\n", key, msg.recvd, hostTime, msg.recvd.Sub(msg.date))))
+			w.Write([]byte(fmt.Sprintf("%16s | %v | %v | %10s\n", key, msg.recvd, hostTime, msg.recvd.Sub(msg.date))))
 		}
 		w.Write([]byte("\n\n\n"))
+	}
+}
+
+func MailClient(msgChan chan<- []Message) error {
+
+	log.Println("Connecting..")
+	client, err := imap.DialTLS(*server, &tls.Config{})
+
+	if err != nil {
+		return fmt.Errorf("Dial Error:", err)
+	}
+
+	defer client.Logout(0)
+	defer client.Close(true)
+
+	_, err = client.Login(*user, *password)
+	if err != nil {
+		return fmt.Errorf("Failed to auth:", err)
+	}
+
+	_, err = imap.Wait(client.Select("[Gmail]/All Mail", false))
+	if err != nil {
+		return fmt.Errorf("Failed to switch to [Gmail]/All Mail:", err)
+	}
+
+	rsp, err := imap.Wait(client.Capability())
+
+	ReportOK(rsp, err)
+	//log.Println("Caps =", rsp, err)
+
+	//return nil
+
+	log.Println("Querying..")
+
+	yesterday := time.Now().Add(-25 * time.Hour)
+	const layout = "02-Jan-2006"
+	msgs := QueryMessages(client, "SINCE", yesterday.Format(layout))
+
+	msgChan <- msgs
+	log.Println("Number of messages:", len(msgs))
+
+	for {
+		//log.Println("switching to inbox")
+		_, err = imap.Wait(client.Select("inbox", false))
+		if err != nil {
+			return fmt.Errorf("Failed to switch to inbox: %q", err)
+		}
+		//client.Send("NOTIFY", ...)
+		/*
+			N := "notify set status (selected MessageNew (uid)) (subtree Lists MessageNew)"
+			rsp, err := imap.Wait(client.Send(N))
+			log.Println("Rsp =", rsp)
+			ReportOK(rsp, err)
+			log.Println("Rsp =", rsp)
+		*/
+		//log.Println("Going idle")
+		_, err = client.Idle()
+		if err != nil {
+			return fmt.Errorf("Client idle: %q", err)
+		}
+		//log.Println("waiting..")
+		// Blocks until new mail arrives
+		err = client.Recv(-1)
+		if err != nil {
+			// Note: this can happen if the TCP connection is reset.
+			// We should probably deal with this by  restarting.
+			// Presumably any of these can have that problem.
+			return fmt.Errorf("Recv: %q", err)
+		}
+		_, err = client.IdleTerm()
+		if err != nil {
+			return fmt.Errorf("IdleTerm: %q", err)
+		}
+		seqs := []uint32{}
+		for _, resp := range client.Data {
+			switch resp.Label {
+			case "EXISTS":
+				seqs = append(seqs, imap.AsNumber(resp.Fields[0]))
+			}
+		}
+		log.Println("New sequence numbers: ", seqs)
+		if len(seqs) != 0 {
+			// new email!
+			msgChan <- FetchMessages(client, seqs)
+			set, _ := imap.NewSeqSet("")
+			set.AddNum(seqs...)
+			ReportOK(client.Store(set, "+FLAGS.SILENT", imap.NewFlagSet(`\Seen`)))
+			/*
+				_, err = imap.Wait(client.Expunge(set))
+				if err != nil {
+					return fmt.Errorf("EXPUNGE: %q", err)
+				}
+			*/
+		}
 	}
 }
 
@@ -130,76 +215,28 @@ func main() {
 
 	flag.Parse()
 
-	log.Println("Connecting..")
-	client, err := imap.DialTLS(*server, &tls.Config{})
-
-	if err != nil {
-		log.Fatal("Dial Error:", err)
-	}
-
-	defer client.Logout(0)
-	defer client.Close(true)
-
-	_, err = client.Login(*user, *password)
-	if err != nil {
-		log.Fatal("Failed to auth:", err)
-	}
-
-	_, err = imap.Wait(client.Select("[Gmail]/All Mail", false))
-	if err != nil {
-		log.Fatal("Failed to switch to [Gmail]/All Mail:", err)
-	}
-
-	log.Println("Querying..")
-
-	yesterday := time.Now().Add(-25 * time.Hour)
-	const layout = "02-Jan-2006"
-	msgs := QueryMessages(client, "SINCE", yesterday.Format(layout))
-	log.Println("Number of messages: ", len(msgs))
-
+	msgsChan := make(chan []Message)
 	go func() {
 		for {
-			//log.Println("switching to inbox")
-			_, err = imap.Wait(client.Select("inbox", false))
+			err := MailClient(msgsChan)
 			if err != nil {
-				log.Fatal("Failed to switch to inbox:", err)
+				log.Println("MailClient() Error: ", err)
 			}
-			//log.Println("Going idle")
-			_, err := client.Idle()
-			if err != nil {
-				panic(err)
-			}
-			//log.Println("waiting..")
-			err = client.Recv(-1)
-			if err != nil {
-				// Note: this can happen if the TCP connection is reset.
-				// We should probably deal with this by  restarting.
-				// Presumably any of these can have that problem.
-				panic(err)
-			}
-			_, err = client.IdleTerm()
-			if err != nil {
-				panic(err)
-			}
-			seqs := []uint32{}
-			for _, resp := range client.Data {
-				switch resp.Label {
-				case "EXISTS":
-					seqs = append(seqs, resp.Fields[0].(uint32))
-				}
-			}
-			log.Println("New sequence numbers: ", seqs)
-			if len(seqs) != 0 {
-				// new email!
-			}
-
+			time.Sleep(5 * time.Minute)
 		}
 	}()
 
-	handler := &MailHandler{msgs}
+	handler := &MailHandler{}
+
+	go func() {
+		// update handler.Messages
+		for msgs := range msgsChan {
+			handler.Messages = append(handler.Messages, msgs...)
+		}
+	}()
 
 	log.Println("Serving")
-	err = http.ListenAndServe(":5983", handler)
+	err := http.ListenAndServe(":5983", handler)
 	if err != nil {
 		panic(err)
 	}
