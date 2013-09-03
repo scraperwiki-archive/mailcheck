@@ -82,11 +82,11 @@ func QueryMessages(client *imap.Client, args ...string) []Message {
 	return FetchMessages(client, cmd.Data[0].SearchResults())
 }
 
-type MailHandler struct {
+type HttpHandler struct {
 	Messages []Message
 }
 
-func (m *MailHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+func (m *HttpHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(200)
 	byhost := map[string][]Message{}
 
@@ -227,7 +227,7 @@ func main() {
 		}
 	}()
 
-	handler := &MailHandler{}
+	handler := &HttpHandler{Messages: []Message{}}
 
 	go func() {
 		// update handler.Messages
