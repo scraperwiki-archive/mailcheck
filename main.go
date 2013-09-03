@@ -18,6 +18,7 @@ var _ = pretty.Print
 var server = flag.String("server", "imap.gmail.com", "Server to check")
 var user = flag.String("user", "mailcheck@scraperwiki.com", "IMAP user")
 var password = flag.String("password", "", "Mail to check")
+var listen_addr = flag.String("listen_addr", "0.0.0.0:5983", "Address to listen on for HTTP requests")
 
 type Message struct {
 	recvd, date   time.Time
@@ -235,8 +236,8 @@ func main() {
 		}
 	}()
 
-	log.Println("Serving")
-	err := http.ListenAndServe(":5983", handler)
+	log.Println("Serving on", *listen_addr)
+	err := http.ListenAndServe(*listen_addr, handler)
 	if err != nil {
 		panic(err)
 	}
