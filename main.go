@@ -10,11 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"code.google.com/p/go-imap/go1/imap"
-	"github.com/kr/pretty"
+	"github.com/scraperwiki/mailcheck/go-imap/go1/imap"
 )
-
-var _ = pretty.Print
 
 var server = flag.String("server", "imap.gmail.com", "Server to check")
 var user = flag.String("user", "mailcheck@scraperwiki.com", "IMAP user")
