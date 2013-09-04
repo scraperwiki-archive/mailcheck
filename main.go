@@ -212,25 +212,15 @@ func MailClient(msgChan chan<- []Message) error {
 				seqs = append(seqs, imap.AsNumber(resp.Fields[0]))
 			}
 		}
+		// Clear client data so that we don't see the same sequence numbers
+		// repeatedly
+		client.Data = nil
 
 		log.Printf("%d new messages", len(seqs))
 
 		if len(seqs) != 0 {
 			// New e-mail! Fetch, parse, and send them to who asked for them.
 			msgChan <- FetchMessages(client, seqs)
-
-			// Flag the emails as seen, so that we don't get notified about them
-			// repeatedly by Idle.
-			set, _ := imap.NewSeqSet("")
-			set.AddNum(seqs...)
-			cmd, err := client.Store(set, "+FLAGS.SILENT", imap.NewFlagSet(`\Seen`))
-			if err != nil {
-				panic(err)
-			}
-			_, err = cmd.Result(imap.OK)
-			if err != nil {
-				panic(err)
-			}
 		}
 	}
 }
