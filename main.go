@@ -21,6 +21,9 @@ var user = flag.String("user", "mailcheck@scraperwiki.com", "IMAP user")
 var password = flag.String("password", "", "Mail to check")
 var listen_addr = flag.String("listen_addr", "0.0.0.0:5983", "Address to listen on for HTTP requests")
 var frequency = flag.Duration("frequency", 1*time.Minute, "Expected frequency of email delivery")
+var time_period = flag.Duration("time_period", 49*time.Hour, "Amount of historic email to fetch (days)")
+
+const time_layout = "2006-01-02 15:04:05"
 
 type Message struct {
 	recvd, date   time.Time
@@ -96,6 +99,13 @@ type HttpHandler struct {
 
 func (m *HttpHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(200)
+	//# resp := bufio.NewWriter(w)
+	// defer resp.Flush()
+
+	R := func(format string, args ...interface{}) {
+		fmt.Fprintf(w, format, args...)
+	}
+
 	byhost := map[string][]Message{}
 
 	for _, msg := range m.Messages {
@@ -109,23 +119,43 @@ func (m *HttpHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		byhost[host] = append(byhost[host], msg)
 	}
 
+	lines := []string{}
 	for key, msgs := range byhost {
 		sort.Sort(Messages(msgs))
 
 		var previous time.Time
 
-		w.Write([]byte("Host : " + key + "\n"))
-		for _, msg := range msgs {
+		oldest_missed_message := time.Now()
+
+		total_missed := 0
+		for i, msg := range msgs {
 			delivery_duration := msg.recvd.Sub(msg.date)
 			gap_duration := msg.date.Sub(previous)
 			// Subtract 1 because there should be at least one "frequency" and add 0.5 to round to nearest integer
 			num_missed := int((gap_duration.Minutes() / frequency.Minutes()) - 1 + 0.5)
-			const layout = "2006-01-02 15:04:05"
-			sent := msg.date.Format(layout)
-			recvd := msg.recvd.Format(layout)
-			w.Write([]byte(fmt.Sprintf("%16s | %s | %s | %10s | %10s | %5d\n", key, sent, recvd, delivery_duration, gap_duration, num_missed)))
+			if i == 0 {
+				num_missed = 0
+				gap_duration = 0
+			}
+			total_missed += num_missed
+			if num_missed > 0 && msg.date.Before(oldest_missed_message) {
+				oldest_missed_message = msg.date
+			}
+			sent := msg.date.Format(time_layout)
+			recvd := msg.recvd.Format(time_layout)
+			var lateness time.Duration
+			if num_missed != 0 {
+				lateness = time.Since(msg.date)
+			}
+			line := fmt.Sprintf("%16s | %s | %s | %10s | %10s | %5d | %v\n",
+				key, sent, recvd, delivery_duration, gap_duration, num_missed, lateness)
+			lines = append(lines, line)
 			previous = msg.date
 		}
+		w.Write([]byte("Host : " + key + "\n"))
+		R("Total messages missed: %d\n", total_missed)
+		R("Total messages: %d\n", len(msgs))
+		R("Oldest missed messages: %s\n", oldest_missed_message.Format(time_layout))
 		w.Write([]byte("\n\n\n"))
 	}
 }
@@ -157,9 +187,9 @@ func MailClient(msgChan chan<- []Message) error {
 	log.Println("Querying..")
 
 	// Fetch the last <time unit> days worth of e-mails from "All Mail".
-	yesterday := time.Now().Add(-25 * time.Hour)
+	date_from := time.Now().Add(-1 * (*time_period))
 	const layout = "02-Jan-2006"
-	msgs := QueryMessages(client, "SINCE", yesterday.Format(layout))
+	msgs := QueryMessages(client, "SINCE", date_from.Format(layout))
 
 	msgChan <- msgs
 	log.Println("Number of messages:", len(msgs))
