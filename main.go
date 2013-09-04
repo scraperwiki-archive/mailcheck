@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +26,12 @@ type Message struct {
 	from, subject string
 	flags         imap.FlagSet
 }
+
+type Messages []Message
+
+func (m Messages) Len() int           { return len(m) }
+func (m Messages) Swap(i, j int)      { m[i], m[j] = m[j], m[i] }
+func (m Messages) Less(i, j int) bool { return m[i].date.Before(m[j].date) } // order by sent datetime
 
 func ParseMessage(msg *imap.Response) Message {
 	attrs := msg.MessageInfo().Attrs
@@ -102,6 +109,7 @@ func (m *HttpHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	for key, msgs := range byhost {
+		sort.Sort(Messages(msgs))
 
 		w.Write([]byte("Host : " + key + "\n"))
 		for _, msg := range msgs {
