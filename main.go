@@ -130,6 +130,8 @@ func (m *HttpHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// Fetch the last day's worth of e-mails and then idle waiting for push
+// notifications from the IMAP server to tell us that there is new mail.
 func MailClient(msgChan chan<- []Message) error {
 
 	log.Println("Connecting..")
@@ -152,15 +154,9 @@ func MailClient(msgChan chan<- []Message) error {
 		return fmt.Errorf("Failed to switch to [Gmail]/All Mail:", err)
 	}
 
-	//rsp, err := imap.Wait(client.Capability())
-
-	//ReportOK(rsp, err)
-	//log.Println("Caps =", rsp, err)
-
-	//return nil
-
 	log.Println("Querying..")
 
+	// Fetch the last <time unit> days worth of e-mails from "All Mail".
 	yesterday := time.Now().Add(-25 * time.Hour)
 	const layout = "02-Jan-2006"
 	msgs := QueryMessages(client, "SINCE", yesterday.Format(layout))
@@ -168,26 +164,34 @@ func MailClient(msgChan chan<- []Message) error {
 	msgChan <- msgs
 	log.Println("Number of messages:", len(msgs))
 
+	// TODO(pwaller): Refactor the error handling code, a lot.
+
 	for {
 		//log.Println("switching to inbox")
 		_, err = imap.Wait(client.Select("inbox", false))
 		if err != nil {
 			return fmt.Errorf("Failed to switch to inbox: %q", err)
 		}
-		//client.Send("NOTIFY", ...)
-		/*
-			N := "notify set status (selected MessageNew (uid)) (subtree Lists MessageNew)"
-			rsp, err := imap.Wait(client.Send(N))
-			log.Println("Rsp =", rsp)
-			ReportOK(rsp, err)
-			log.Println("Rsp =", rsp)
-		*/
 		//log.Println("Going idle")
-		_, err = client.Idle()
+		cmd, err := client.Idle()
 		if err != nil {
 			return fmt.Errorf("Client idle: %q", err)
 		}
+		rsp, err := cmd.Result(imap.OK)
+		if err != nil {
+			return fmt.Errorf("Client idle: %q", err)
+		}
+		if rsp.Type != imap.Continue {
+			// Continuation IMAP state
+			return fmt.Errorf("Expected continuation state not reached")
+		}
 		//log.Println("waiting..")
+
+		// TODO(pwaller): Do blocking operation in the new goroutine so that we
+		// can have a way of aborting it along with a timeout. We expect to
+		// receive new mail with a reasonable frequency, so if we don't, we
+		// should bail the whole imap connection and try again.
+
 		// Blocks until new mail arrives
 		err = client.Recv(-1)
 		if err != nil {
@@ -196,21 +200,35 @@ func MailClient(msgChan chan<- []Message) error {
 			// Presumably any of these can have that problem.
 			return fmt.Errorf("Recv: %q", err)
 		}
-		_, err = client.IdleTerm()
+
+		// We can't do anything until we exit the idle state
+		cmd, err = client.IdleTerm()
+		if err != nil {
+			return fmt.Errorf("IdleTerm: %q", err)
+		}
+		_, err = cmd.Result(imap.OK)
 		if err != nil {
 			return fmt.Errorf("IdleTerm: %q", err)
 		}
 		seqs := []uint32{}
 		for _, resp := range client.Data {
+			// The IMAP server can send us a load of different types of
+			// unsolicited commands but we only care about "EXISTS" which
+			// indicates there is new mail that is not marked \Seen
 			switch resp.Label {
 			case "EXISTS":
 				seqs = append(seqs, imap.AsNumber(resp.Fields[0]))
 			}
 		}
-		log.Println("New sequence numbers: ", seqs)
+
+		log.Printf("%d new messages", len(seqs))
+
 		if len(seqs) != 0 {
-			// new email!
+			// New e-mail! Fetch, parse, and send them to who asked for them.
 			msgChan <- FetchMessages(client, seqs)
+
+			// Flag the emails as seen, so that we don't get notified about them
+			// repeatedly by Idle.
 			set, _ := imap.NewSeqSet("")
 			set.AddNum(seqs...)
 			cmd, err := client.Store(set, "+FLAGS.SILENT", imap.NewFlagSet(`\Seen`))
@@ -221,12 +239,6 @@ func MailClient(msgChan chan<- []Message) error {
 			if err != nil {
 				panic(err)
 			}
-			/*
-				_, err = imap.Wait(client.Expunge(set))
-				if err != nil {
-					return fmt.Errorf("EXPUNGE: %q", err)
-				}
-			*/
 		}
 	}
 }
@@ -237,12 +249,16 @@ func main() {
 	flag.Parse()
 
 	msgsChan := make(chan []Message)
+
+	// The top-level mail client go-routine.
 	go func() {
 		for {
 			err := MailClient(msgsChan)
 			if err != nil {
 				log.Println("MailClient() Error: ", err)
 			}
+			// Back off for a reasonable length of time before trying to
+			// connect to the IMAP server again.
 			time.Sleep(5 * time.Minute)
 		}
 	}()
@@ -250,7 +266,10 @@ func main() {
 	handler := &HttpHandler{Messages: []Message{}}
 
 	go func() {
-		// update handler.Messages
+		// Routine responsible for updating handler.Messages
+		// TODO(pwaller): HttpHandler really should use a sync.RWMutex
+		//                otherwise it's possible the http client sees a partial
+		//                state
 		for msgs := range msgsChan {
 			handler.Messages = append(handler.Messages, msgs...)
 		}
