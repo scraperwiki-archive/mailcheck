@@ -20,6 +20,7 @@ var server = flag.String("server", "imap.gmail.com", "Server to check")
 var user = flag.String("user", "mailcheck@scraperwiki.com", "IMAP user")
 var password = flag.String("password", "", "Mail to check")
 var listen_addr = flag.String("listen_addr", "0.0.0.0:5983", "Address to listen on for HTTP requests")
+var frequency = flag.Duration("frequency", 1*time.Minute, "Expected frequency of email delivery")
 
 type Message struct {
 	recvd, date   time.Time
@@ -111,15 +112,19 @@ func (m *HttpHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	for key, msgs := range byhost {
 		sort.Sort(Messages(msgs))
 
+		var previous time.Time
+
 		w.Write([]byte("Host : " + key + "\n"))
 		for _, msg := range msgs {
-			x := strings.Split(msg.subject, " | ")
-			if len(x) != 2 {
-				continue
-			}
-			_, hostTime := x[0], x[1]
-
-			w.Write([]byte(fmt.Sprintf("%16s | %v | %v | %10s\n", key, msg.recvd, hostTime, msg.recvd.Sub(msg.date))))
+			delivery_duration := msg.recvd.Sub(msg.date)
+			gap_duration := msg.date.Sub(previous)
+			// Subtract 1 because there should be at least one "frequency" and add 0.5 to round to nearest integer
+			num_missed := int((gap_duration.Minutes() / frequency.Minutes()) - 1 + 0.5)
+			const layout = "2006-01-02 15:04:05"
+			sent := msg.date.Format(layout)
+			recvd := msg.recvd.Format(layout)
+			w.Write([]byte(fmt.Sprintf("%16s | %s | %s | %10s | %10s | %5d\n", key, sent, recvd, delivery_duration, gap_duration, num_missed)))
+			previous = msg.date
 		}
 		w.Write([]byte("\n\n\n"))
 	}
