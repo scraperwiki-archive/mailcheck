@@ -173,17 +173,9 @@ func MailClient(msgChan chan<- []Message) error {
 			return fmt.Errorf("Failed to switch to inbox: %q", err)
 		}
 		//log.Println("Going idle")
-		cmd, err := client.Idle()
+		_, err := client.Idle()
 		if err != nil {
 			return fmt.Errorf("Client idle: %q", err)
-		}
-		rsp, err := cmd.Result(imap.OK)
-		if err != nil {
-			return fmt.Errorf("Client idle: %q", err)
-		}
-		if rsp.Type != imap.Continue {
-			// Continuation IMAP state
-			return fmt.Errorf("Expected continuation state not reached")
 		}
 		//log.Println("waiting..")
 
@@ -202,7 +194,7 @@ func MailClient(msgChan chan<- []Message) error {
 		}
 
 		// We can't do anything until we exit the idle state
-		cmd, err = client.IdleTerm()
+		cmd, err := client.IdleTerm()
 		if err != nil {
 			return fmt.Errorf("IdleTerm: %q", err)
 		}
