@@ -213,7 +213,14 @@ func MailClient(msgChan chan<- []Message) error {
 			msgChan <- FetchMessages(client, seqs)
 			set, _ := imap.NewSeqSet("")
 			set.AddNum(seqs...)
-			ReportOK(client.Store(set, "+FLAGS.SILENT", imap.NewFlagSet(`\Seen`)))
+			cmd, err := client.Store(set, "+FLAGS.SILENT", imap.NewFlagSet(`\Seen`))
+			if err != nil {
+				panic(err)
+			}
+			_, err = cmd.Result(imap.OK)
+			if err != nil {
+				panic(err)
+			}
 			/*
 				_, err = imap.Wait(client.Expunge(set))
 				if err != nil {
@@ -249,7 +256,7 @@ func main() {
 		}
 	}()
 
-	log.Println("Serving on", *listen_addr)
+	log.Printf("Serving on http://%s", *listen_addr)
 	err := http.ListenAndServe(*listen_addr, handler)
 	if err != nil {
 		panic(err)
