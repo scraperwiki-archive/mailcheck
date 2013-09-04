@@ -121,6 +121,8 @@ func (m *HttpHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	lines := []string{}
 	for key, msgs := range byhost {
+		lines = append(lines, "Host : "+key+"\n\n")
+
 		sort.Sort(Messages(msgs))
 
 		var previous time.Time
@@ -152,12 +154,23 @@ func (m *HttpHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			lines = append(lines, line)
 			previous = msg.date
 		}
+
+		//
+		// Criterial for health of email system
+		//
+		state := "GOOD"
+		if oldest_missed_message.Before(time.Now().Add(-24 * time.Hour)) {
+			state = "BAD"
+		}
+
 		w.Write([]byte("Host : " + key + "\n"))
 		R("Total messages missed: %d\n", total_missed)
 		R("Total messages: %d\n", len(msgs))
 		R("Oldest missed messages: %s\n", oldest_missed_message.Format(time_layout))
+		R("State %s: %s", key, state)
 		w.Write([]byte("\n\n\n"))
 	}
+	R(strings.Join(lines, ""))
 }
 
 // Fetch the last day's worth of e-mails and then idle waiting for push
