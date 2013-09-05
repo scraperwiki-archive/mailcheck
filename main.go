@@ -226,7 +226,7 @@ func MailClient(msgChan chan<- []Message) error {
 		// Blocks until new mail arrives
 		// Wait a maximum of five minutes before giving up
 		err = client.Recv(5 * time.Minute)
-		if err != nil {
+		if err != nil && err != imap.ErrTimeout {
 			// Note: this can happen if the TCP connection is reset.
 			// We should probably deal with this by  restarting.
 			// Presumably any of these can have that problem.
