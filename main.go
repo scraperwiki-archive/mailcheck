@@ -299,6 +299,10 @@ func main() {
 				continue
 			}
 			handler.Messages = append(handler.Messages, msgs...)
+			const MAX_LOCAL_MSGS = 10000
+			if len(handler.Messages) > MAX_LOCAL_MSGS {
+				handler.Messages = handler.Messages[len(handler.Messages)-MAX_LOCAL_MSGS:]
+			}
 		}
 	}()
 
