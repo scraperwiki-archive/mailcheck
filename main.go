@@ -204,6 +204,7 @@ func MailClient(msgChan chan<- []Message) error {
 	const layout = "02-Jan-2006"
 	msgs := QueryMessages(client, "SINCE", date_from.Format(layout))
 
+	msgChan <- nil
 	msgChan <- msgs
 	log.Println("Number of messages:", len(msgs))
 
@@ -292,6 +293,11 @@ func main() {
 		//                otherwise it's possible the http client sees a partial
 		//                state
 		for msgs := range msgsChan {
+			if msgs == nil {
+				// Signal to clear the handler.Messages list
+				handler.Messages = []Message{}
+				continue
+			}
 			handler.Messages = append(handler.Messages, msgs...)
 		}
 	}()
