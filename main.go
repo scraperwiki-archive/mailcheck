@@ -204,9 +204,10 @@ func MailClient(msgChan chan<- []Message) error {
 	const layout = "02-Jan-2006"
 	msgs := QueryMessages(client, "SINCE", date_from.Format(layout))
 
+	log.Println("Number of messages:", len(msgs))
+
 	msgChan <- nil
 	msgChan <- msgs
-	log.Println("Number of messages:", len(msgs))
 
 	// TODO(pwaller): Refactor the error handling code, a lot.
 
@@ -298,11 +299,16 @@ func main() {
 				handler.Messages = []Message{}
 				continue
 			}
-			handler.Messages = append(handler.Messages, msgs...)
-			const MAX_LOCAL_MSGS = 10000
-			if len(handler.Messages) > MAX_LOCAL_MSGS {
-				handler.Messages = handler.Messages[len(handler.Messages)-MAX_LOCAL_MSGS:]
+			newMessages := []Message{}
+			timeWindowStart := time.Now().Add(-1 * (*time_period))
+			for _, msg := range append(handler.Messages, msgs...) {
+				if msg.date.Before(timeWindowStart) {
+					continue
+				}
+				newMessages = append(newMessages, msg)
 			}
+			log.Println(" # msgs in memory:", len(newMessages))
+			handler.Messages = newMessages
 		}
 	}()
 
