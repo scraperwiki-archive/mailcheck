@@ -27,6 +27,7 @@ missing for more than 24 hours this is counted as a failure and the summary
 shown for the server will say that the state is BAD.
 
 If you wish to modify the "BAD" criterion, take a look [here](https://github.com/scraperwiki/mailcheck/blob/c378d8245b074704085a734d9ce9c2aeaddde1d5/main.go#L157) (note: this is pinned to a specific revision).
+
 ---
 
 Deployment on AWS with juju:
