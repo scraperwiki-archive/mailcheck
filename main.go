@@ -98,6 +98,7 @@ func (m *HttpHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(200)
 	//# resp := bufio.NewWriter(w)
 	// defer resp.Flush()
+	s := time.Now()
 
 	R := func(format string, args ...interface{}) {
 		fmt.Fprintf(w, format, args...)
@@ -168,6 +169,8 @@ func (m *HttpHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		w.Write([]byte("\n\n\n"))
 	}
 	R(strings.Join(lines, ""))
+	R("\n")
+	R("Generation time: %s\n", time.Since(s))
 }
 
 // Fetch the last day's worth of e-mails and then idle waiting for push
@@ -219,13 +222,9 @@ func MailClient(msgChan chan<- []Message) error {
 		}
 		//log.Println("waiting..")
 
-		// TODO(pwaller): Do blocking operation in the new goroutine so that we
-		// can have a way of aborting it along with a timeout. We expect to
-		// receive new mail with a reasonable frequency, so if we don't, we
-		// should bail the whole imap connection and try again.
-
 		// Blocks until new mail arrives
-		err = client.Recv(-1)
+		// Wait a maximum of five minutes before giving up
+		err = client.Recv(5 * time.Minute)
 		if err != nil {
 			// Note: this can happen if the TCP connection is reset.
 			// We should probably deal with this by  restarting.
@@ -277,7 +276,7 @@ func main() {
 		for {
 			err := MailClient(msgsChan)
 			if err != nil {
-				log.Println("MailClient() Error: ", err)
+				log.Printf("MailClient failed, trying again in 5m: %q", err)
 			}
 			// Back off for a reasonable length of time before trying to
 			// connect to the IMAP server again.
